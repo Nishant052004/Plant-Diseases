@@ -1,8 +1,9 @@
-streamlit 
+﻿streamlit
 tensorflow
 numpy
 pandas
 matplotlib
 scikit-learn
 pillow
-
+plotly
+reportlab
