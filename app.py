@@ -1,13 +1,17 @@
-import os
 import io
 import datetime
-import numpy as np
 import tensorflow as tf
 import streamlit as st
 from PIL import Image
 import plotly.graph_objects as go
 
 from disease_info import disease_info
+from inference import (
+    preprocess_image,
+    prediction_probabilities,
+    project_path,
+    top_predictions,
+)
 from report_generator import generate_pdf_report
 
 # ==========================================
@@ -455,14 +459,14 @@ button[data-baseweb="tab"][aria-selected="true"] {
 # ==========================================
 @st.cache_resource
 def load_deep_learning_model():
-    return tf.keras.models.load_model("plant_disease_model.h5")
+    return tf.keras.models.load_model(str(project_path("plant_disease_model.h5")))
 
 try:
     model = load_deep_learning_model()
 except Exception as e:
     st.error(f"⚠️ Error loading deep learning model weights: {e}")
 
-with open("labels.txt", "r") as f:
+with open(project_path("labels.txt"), "r") as f:
     classes = [line.strip() for line in f.readlines()]
 
 # ==========================================
@@ -566,13 +570,14 @@ with tab_samples:
     
     for idx, s in enumerate(samples_info):
         with cols[idx]:
-            if os.path.exists(s["file"]):
-                thumb_img = Image.open(s["file"])
+            sample_path = project_path(s["file"])
+            if sample_path.exists():
+                thumb_img = Image.open(sample_path)
                 st.image(thumb_img, use_container_width=True)
                 st.markdown(f"**{s['label']}**")
                 st.caption(f"{s['crop']} · {s['severity']}")
                 if st.button(f"Load Sample #{idx+1}", key=f"btn_sample_{idx}", use_container_width=True):
-                    st.session_state.active_image = Image.open(s["file"]).convert("RGB")
+                    st.session_state.active_image = Image.open(sample_path).convert("RGB")
                     st.session_state.image_source_name = s["label"]
                     st.success(f"✓ Loaded {s['label']}. Switch to Diagnostic Lab tab to view results!")
             else:
@@ -635,15 +640,12 @@ with tab_diag:
     with col_result:
         if st.session_state.active_image is not None:
             # Preprocessing & Inference
-            img_resized = st.session_state.active_image.resize((224, 224))
-            img_arr = np.array(img_resized) / 255.0
-            img_arr = np.expand_dims(img_arr, axis=0)
-            
             with st.spinner("🧠 Executing Convolutional Neural Network inference..."):
-                raw_pred = model.predict(img_arr, verbose=0)[0]
-                pred_idx = int(np.argmax(raw_pred))
+                image_batch = preprocess_image(st.session_state.active_image)
+                raw_pred = prediction_probabilities(model.predict(image_batch, verbose=0), len(classes))
+                pred_idx, pred_probability = top_predictions(raw_pred, limit=1)[0]
                 pred_class = classes[pred_idx]
-                confidence_score = float(raw_pred[pred_idx]) * 100
+                confidence_score = pred_probability * 100
                 
             display_name = CLASS_DISPLAY_NAMES.get(pred_class, pred_class)
             category = CLASS_CATEGORIES.get(pred_class, "Unknown")
@@ -690,15 +692,14 @@ with tab_diag:
             st.markdown('<div class="panel-card">', unsafe_allow_html=True)
             st.markdown('<div class="panel-title">📊 Top 3 Candidate Probabilities</div>', unsafe_allow_html=True)
             
-            top3_indices = np.argsort(raw_pred)[-3:][::-1]
             top3_data = []
             top3_labels = []
             top3_scores = []
-            
-            for idx in top3_indices:
+
+            for idx, prob in top_predictions(raw_pred, limit=3):
                 cname = classes[idx]
                 dname = CLASS_DISPLAY_NAMES.get(cname, cname)
-                sc = float(raw_pred[idx]) * 100
+                sc = prob * 100
                 top3_labels.append(dname)
                 top3_scores.append(sc)
                 top3_data.append((dname, sc))
